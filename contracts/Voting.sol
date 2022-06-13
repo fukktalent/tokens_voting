@@ -1,13 +1,14 @@
 //SPDX-License-Identifier: Unlicense
 pragma solidity ^0.8.13;
 
+import "hardhat/console.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 
 /// @title DAO Voting contract
 /// @author fukktalent
 /// @notice voting for purposes. one token is one vote
-contract Voting is Ownable {
+contract Voting is AccessControl {
     struct Proposal {
         bytes callData;
         address recipient;
@@ -21,6 +22,8 @@ contract Voting is Ownable {
         uint256 balance;
         uint32 lastFinishDate;
     }
+
+    bytes32 public constant CHAIRMAN_ROLE = keccak256("CHAIRMAN_ROLE");
 
     IERC20 private _token;
     uint32 private _debatingPeriodDuration;
@@ -78,21 +81,25 @@ contract Voting is Ownable {
     error ActiveBalance();
     error InvalidAmount();
     error AlreadyVoted();
+    error ZeroBalance();
 
     modifier onlyActive(uint64 proposalId) {
         if (_proposals[proposalId].finishDate == 0) revert InvalidProposal();
         _;
     }
 
-    /// @notice set init data
+    /// @notice set init data and grand DEFAULT_ADMIN_ROLE to owner
     /// @param token erc20 tokens, use as votes
     /// @param debatingPeriodDuration_ voting duration in seconds
     /// @param minimumQuorum_ minimum number of votes at which voting will take place
     constructor(
         IERC20 token,
         uint32 debatingPeriodDuration_,
-        uint256 minimumQuorum_
+        uint256 minimumQuorum_,
+        address chairman
     ) {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(CHAIRMAN_ROLE, chairman);
         _token = token;
         _debatingPeriodDuration = debatingPeriodDuration_;
         _minimumQuorum = minimumQuorum_;
@@ -113,7 +120,7 @@ contract Voting is Ownable {
         bytes memory callData,
         address recipient,
         string memory description
-    ) external onlyOwner {
+    ) external onlyRole(CHAIRMAN_ROLE) {
         uint64 proposalId = _proposalCount;
         _proposalCount++;
 
@@ -143,9 +150,16 @@ contract Voting is Ownable {
     {
         if (_proposals[proposalId].finishDate <= block.timestamp) revert NotActiveProposalTime();
         if (_isVoted[msg.sender][proposalId]) revert AlreadyVoted();
+        if (_users[msg.sender].balance == 0) revert ZeroBalance();
 
         _isVoted[msg.sender][proposalId] = true;
-        _users[msg.sender].lastFinishDate = _proposals[proposalId].finishDate;
+
+        if (
+          _users[msg.sender].lastFinishDate < _proposals[proposalId].finishDate
+        ) {
+            _users[msg.sender].lastFinishDate = _proposals[proposalId].finishDate;
+        }
+
         if (isFor) {
             _proposals[proposalId].votesFor += _users[msg.sender].balance;
         } else {
